@@ -18,8 +18,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APIMART_API_KEY = os.getenv("APIMART_API_KEY", "").strip()
-APIMART_BASE_URL = os.getenv("APIMART_BASE_URL", "https://api.apimart.ai").strip().rstrip("/")
+def get_secret_value(key, default=""):
+    try:
+        value = st.secrets.get(key, None)
+        if value is not None:
+            return str(value)
+    except Exception:
+        pass
+
+    return os.getenv(key, default)
+
+
+APIMART_API_KEY = get_secret_value("APIMART_API_KEY", "").strip()
+APIMART_BASE_URL = get_secret_value("APIMART_BASE_URL", "https://api.apimart.ai").strip().rstrip("/")
+APP_PASSWORD = get_secret_value("APP_PASSWORD", "").strip()
 
 GENERATE_ENDPOINT = f"{APIMART_BASE_URL}/v1/images/generations"
 TASK_ENDPOINT = f"{APIMART_BASE_URL}/v1/tasks"
@@ -328,7 +340,28 @@ st.set_page_config(
     page_icon="🎨",
     layout="wide"
 )
+def check_password():
+    if not APP_PASSWORD:
+        return True
 
+    if st.session_state.get("password_ok", False):
+        return True
+
+    st.title("访问验证")
+    password = st.text_input("请输入访问密码", type="password")
+
+    if password == APP_PASSWORD:
+        st.session_state["password_ok"] = True
+        st.rerun()
+
+    if password:
+        st.error("密码错误")
+
+    return False
+
+
+if not check_password():
+    st.stop()
 st.title("🎨 APImart 并行批量图片生成工具")
 st.caption("上传 Excel → 并发提交任务 → 并发轮询 → 下载图片 → 打包 ZIP")
 
