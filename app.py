@@ -10,10 +10,11 @@ import requests
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from etsy_tools import (
-    collect_etsy_shop_assets,
-    build_boss_view_rows,
-    build_ai_import_rows,
+from ehunt_tools import (
+    read_ehunt_file,
+    convert_ehunt_df,
+    build_ehunt_boss_rows,
+    build_ehunt_ai_rows,
 )
 
 
@@ -371,7 +372,7 @@ st.title("🎨 电商素材采集 + AI 批量生图工具")
 
 page = st.sidebar.radio(
     "选择功能",
-    ["AI 批量生图", "Etsy 店铺素材采集"]
+    ["AI 批量生图", "Etsy 素材采集结果导入", "eHunt 数据导入"]
 )
 st.caption("上传 Excel → 并发提交任务 → 并发轮询 → 下载图片 → 打包 ZIP")
 
@@ -586,6 +587,109 @@ if page == "Etsy 店铺素材采集":
         )
 
     st.stop()
+if page == "eHunt 数据导入":
+    st.subheader("📊 eHunt 数据导入 / 转换")
+
+    st.info(
+        "推荐流程：先在 eHunt 里筛选 Etsy 店铺或商品，并导出 CSV / Excel；"
+        "再上传到这里，系统会自动整理成老板查看表和 AI 生图导入表。"
+    )
+
+    st.warning(
+        "建议使用 eHunt 自带导出功能，不建议直接爬 eHunt 网站后台数据。"
+    )
+
+    uploaded_ehunt_file = st.file_uploader(
+        "上传 eHunt 导出的 CSV / Excel",
+        type=["csv", "xlsx", "xls"]
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        images_per_product = st.number_input(
+            "每个商品最多保留图片数",
+            min_value=1,
+            max_value=30,
+            value=10,
+            step=1
+        )
+
+    with col2:
+        show_raw = st.checkbox("显示原始表格预览", value=True)
+
+    if uploaded_ehunt_file:
+        try:
+            raw_df = read_ehunt_file(uploaded_ehunt_file)
+        except Exception as e:
+            st.error(f"读取文件失败：{e}")
+            st.stop()
+
+        st.success(f"文件读取成功，共 {len(raw_df)} 行，{len(raw_df.columns)} 列。")
+
+        if show_raw:
+            st.subheader("原始 eHunt 表格预览")
+            st.dataframe(raw_df, use_container_width=True)
+
+        results = convert_ehunt_df(
+            raw_df,
+            images_per_product=int(images_per_product)
+        )
+
+        if not results:
+            st.error("没有识别到有效商品数据。请检查 eHunt 导出的表是否包含商品标题、商品链接、图片链接等字段。")
+            st.stop()
+
+        boss_df = pd.DataFrame(build_ehunt_boss_rows(results))
+        ai_df = pd.DataFrame(build_ehunt_ai_rows(results))
+
+        st.subheader("老板查看表")
+        st.dataframe(boss_df, use_container_width=True)
+
+        st.subheader("AI 生图导入表")
+        st.dataframe(ai_df, use_container_width=True)
+
+        excel_buffer = io.BytesIO()
+
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            boss_df.to_excel(writer, index=False, sheet_name="老板查看表")
+            ai_df.to_excel(writer, index=False, sheet_name="AI生图导入表")
+
+            workbook = writer.book
+
+            for sheet_name in ["老板查看表", "AI生图导入表"]:
+                worksheet = workbook[sheet_name]
+                worksheet.freeze_panes = "A2"
+
+                for column_cells in worksheet.columns:
+                    max_length = 0
+                    column_letter = column_cells[0].column_letter
+
+                    for cell in column_cells:
+                        value = cell.value
+                        if value is None:
+                            continue
+
+                        max_length = max(max_length, len(str(value)))
+
+                    worksheet.column_dimensions[column_letter].width = min(max_length + 2, 80)
+
+        excel_buffer.seek(0)
+
+        st.download_button(
+            label="下载转换后的 Excel",
+            data=excel_buffer,
+            file_name="ehunt数据转换结果.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.info(
+            "下载后的 Excel 有两个 Sheet："
+            "“老板查看表”用于检查素材；"
+            "“AI生图导入表”可以直接上传到 AI 批量生图页面。"
+        )
+
+    st.stop()    
 uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
 
 if uploaded_file is None:
