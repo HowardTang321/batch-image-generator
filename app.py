@@ -10,6 +10,11 @@ import requests
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+from etsy_tools import (
+    collect_etsy_shop_assets,
+    build_boss_view_rows,
+    build_ai_import_rows,
+)
 
 
 # =========================
@@ -362,8 +367,14 @@ def check_password():
 
 if not check_password():
     st.stop()
-st.title("🎨 APImart 并行批量图片生成工具")
+st.title("🎨 电商素材采集 + AI 批量生图工具")
+
+page = st.sidebar.radio(
+    "选择功能",
+    ["AI 批量生图", "Etsy 店铺素材采集"]
+)
 st.caption("上传 Excel → 并发提交任务 → 并发轮询 → 下载图片 → 打包 ZIP")
+
 
 with st.sidebar:
     st.header("全局设置")
@@ -430,7 +441,151 @@ with st.sidebar:
     else:
         st.error("未检测到 APIMART_API_KEY")
 
+if page == "Etsy 店铺素材采集":
+    st.subheader("🛒 Etsy 店铺图片 / 视频链接采集")
 
+    st.info(
+        "按老板要求：输入 Etsy 店铺链接，自动提取店铺商品、每个商品的图片链接和视频链接，"
+        "导出 Excel；老板查看表会在不同商品之间自动加空行。"
+    )
+
+    st.warning(
+        "请仅用于自有店铺或已授权店铺。此工具不会绕过验证码、不会使用代理池、不会高频请求。"
+    )
+
+    default_shop_url = (
+        "https://www.etsy.com/shop/HappyLaceCo?"
+        "ref=shop-header-name&listing_id=450016132&from_page=listing"
+    )
+
+    shop_url = st.text_input(
+        "Etsy 店铺链接",
+        value=default_shop_url,
+        placeholder="例如：https://www.etsy.com/shop/HappyLaceCo"
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        max_pages = st.number_input(
+            "最多翻页数",
+            min_value=1,
+            max_value=20,
+            value=5,
+            step=1
+        )
+
+    with col2:
+        max_items = st.number_input(
+            "最多商品数",
+            min_value=1,
+            max_value=500,
+            value=50,
+            step=1
+        )
+
+    with col3:
+        images_per_product = st.number_input(
+            "每个商品最多图片数",
+            min_value=1,
+            max_value=20,
+            value=10,
+            step=1
+        )
+
+    with col4:
+        delay_seconds = st.number_input(
+            "请求间隔秒数",
+            min_value=1.0,
+            max_value=20.0,
+            value=2.5,
+            step=0.5
+        )
+
+    start_collect = st.button("开始采集 Etsy 店铺素材", type="primary")
+
+    if start_collect:
+        if not shop_url.strip():
+            st.error("请先输入 Etsy 店铺链接。")
+            st.stop()
+
+        progress = st.empty()
+
+        with st.spinner("正在采集 Etsy 店铺商品、图片和视频链接，请稍等..."):
+            try:
+                results = collect_etsy_shop_assets(
+                    shop_url=shop_url.strip(),
+                    max_pages=int(max_pages),
+                    max_items=int(max_items),
+                    images_per_product=int(images_per_product),
+                    delay_seconds=float(delay_seconds),
+                )
+            except Exception as e:
+                st.error(f"采集失败：{e}")
+                st.stop()
+
+        if not results:
+            st.error("没有采集到商品。可能是 Etsy 页面结构变化、触发验证，或店铺链接不正确。")
+            st.stop()
+
+        boss_rows = build_boss_view_rows(results)
+        ai_rows = build_ai_import_rows(results)
+
+        boss_df = pd.DataFrame(boss_rows)
+        ai_df = pd.DataFrame(ai_rows)
+
+        success_count = sum(1 for x in results if x.get("status") == "成功")
+        fail_count = len(results) - success_count
+
+        st.success(f"采集完成：共 {len(results)} 个商品，成功 {success_count} 个，失败 {fail_count} 个。")
+
+        st.subheader("老板查看表预览")
+        st.dataframe(boss_df, use_container_width=True)
+
+        st.subheader("AI 生图导入表预览")
+        st.dataframe(ai_df, use_container_width=True)
+
+        excel_buffer = io.BytesIO()
+
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            boss_df.to_excel(writer, index=False, sheet_name="老板查看表")
+            ai_df.to_excel(writer, index=False, sheet_name="AI生图导入表")
+
+            workbook = writer.book
+
+            for sheet_name in ["老板查看表", "AI生图导入表"]:
+                worksheet = workbook[sheet_name]
+                worksheet.freeze_panes = "A2"
+
+                for column_cells in worksheet.columns:
+                    max_length = 0
+                    column_letter = column_cells[0].column_letter
+
+                    for cell in column_cells:
+                        value = cell.value
+                        if value is None:
+                            continue
+
+                        max_length = max(max_length, len(str(value)))
+
+                    worksheet.column_dimensions[column_letter].width = min(max_length + 2, 80)
+
+        excel_buffer.seek(0)
+
+        st.download_button(
+            label="下载 Etsy 店铺素材采集结果 Excel",
+            data=excel_buffer,
+            file_name="etsy店铺素材采集结果.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.info(
+            "下载后的 Excel 里有两个 Sheet："
+            "“老板查看表”按商品分组并加空行；"
+            "“AI生图导入表”可以直接用于批量生图。"
+        )
+
+    st.stop()
 uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
 
 if uploaded_file is None:
