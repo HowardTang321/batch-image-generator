@@ -4,3 +4,6 @@ openpyxl
 python-dotenv
 requests
 Pillow
+oss2
+beautifulsoup4
+lxml
