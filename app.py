@@ -689,7 +689,8 @@ if page == "eHunt 数据导入":
             "“AI生图导入表”可以直接上传到 AI 批量生图页面。"
         )
 
-    st.stop()    
+    st.stop()   
+st.subheader("🎨 AI 批量生图")
 uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
 
 if uploaded_file is None:
